@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Pinterest Daily Cover Strip</title>
+  <style>
+    :root {
+      --gap: 8px;        /* spacing between tiles */
+      --radius: 16px;    /* corner rounding */
+      --rows: 1;         /* keep 1 row for a sleek strip */
+      --height: 280px;   /* overall strip height; adjust in Notion as needed */
+    }
+
+    html, body { height: 100%; margin: 0; }
+    body { background: #0f0f10; color: #e8e8ea; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+
+    .wrap {
+      box-sizing: border-box;
+      padding: var(--gap);
+      min-height: 100%;
+      display: grid;
+      place-items: center;
+    }
+
+    .strip {
+      width: 100%;
+      height: var(--height);
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: 1fr;
+      gap: var(--gap);
+      align-items: stretch;
+    }
+
+    .tile {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      border-radius: var(--radius);
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      background: #000;
+    }
+
+    .tile a, .tile img {
+      position: absolute;
+      inset: 0;
+      width: 100%; height: 100%;
+      display: block;
+    }
+
+    .tile img {
+      object-fit: cover;            /* fills like a wallpaper */
+      object-position: center;
+      transition: transform .6s ease;
+    }
+
+    .tile:hover img { transform: scale(1.02); }
+
+    .credit {
+      text-align: center;
+      opacity: .65;
+      font-size: 12px;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="strip" class="strip" aria-live="polite"></div>
+    <div class="credit">Daily cover from your Pinterest board</div>
+  </div>
+
+  <script>
+    // === CONFIG ===
+    const RSS_URL = "https://ca.pinterest.com/lulupontual/visionboard/.rss";
+    const NUM_IMAGES = 4; // how many tiles you want side-by-side
+    const TIMEZONE = "America/Toronto";
+    // Parse RSS via rss2json (simple/free; if you hit limits, I can give you a Cloudflare Worker proxy)
+    const API = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(RSS_URL);
+
+    // Daily seed in America/Toronto
+    function daySeedLocal(tz) {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'
+      }).formatToParts(new Date());
+      const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+      return `${map.year}-${map.month}-${map.day}`;
+    }
+
+    // Simple string hash → 32-bit unsigned int
+    function hashString(str) {
+      let h = 2166136261;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+      }
+      return (h >>> 0);
+    }
+
+    // Deterministic PRNG (mulberry32)
+    function mulberry32(seed) {
+      return function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+
+    // Fisher–Yates shuffle with seeded RNG
+    function shuffle(array, rng) {
+      const a = array.slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    function extractImageFromItem(item) {
+      if (item.enclosure && item.enclosure.link) return item.enclosure.link;
+      if (item.thumbnail) return item.thumbnail;
+      // Fallback: parse first <img> in content
+      const div = document.createElement("div");
+      div.innerHTML = item.content || "";
+      const img = div.querySelector("img");
+      return img && img.src ? img.src : null;
+    }
+
+    async function load() {
+      try {
+        const res = await fetch(API);
+        if (!res.ok) throw new Error("RSS fetch failed");
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+
+        // Keep only entries with an image
+        const withImages = items
+          .map(it => ({ it, img: extractImageFromItem(it) }))
+          .filter(x => !!x.img);
+
+        const strip = document.getElementById("strip");
+        strip.innerHTML = ""; // clear
+
+        if (!withImages.length) {
+          strip.innerHTML = `<div style="display:grid;place-items:center;color:#bbb">No images found in this RSS feed.</div>`;
+          return;
+        }
+
+        // Seeded daily selection
+        const seed = hashString(daySeedLocal(TIMEZONE));
+        const rng = mulberry32(seed);
+        const shuffled = shuffle(withImages, rng);
+
+        const picks = shuffled.slice(0, Math.min(NUM_IMAGES, shuffled.length));
+
+        // Render tiles
+        for (const p of picks) {
+          const tile = document.createElement("div");
+          tile.className = "tile";
+
+          const link = document.createElement("a");
+          link.href = p.it.link || "#";
+          link.target = "_blank";
+          link.rel = "noopener";
+
+          const img = document.createElement("img");
+          img.alt = p.it.title || "Pinterest Pin";
+          img.src = p.img;
+
+          link.appendChild(img);
+          tile.appendChild(link);
+          strip.appendChild(tile);
+        }
+      } catch (e) {
+        console.error(e);
+        const strip = document.getElementById("strip");
+        strip.innerHTML = `<div style="display:grid;place-items:center;color:#bbb">Error loading feed.</div>`;
+      }
+    }
+
+    load();
+
+    // (Optional) Auto-refresh at next local midnight so Notion updates without reload
+    (function scheduleMidnightRefresh(){
+      try {
+        const now = new Date();
+        const tzNow = new Date(new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, hour12:false,
+          year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit'
+        }).format(now).replace(/(\d{4})-(\d{2})-(\d{2}), (\d{2}):(\d{2}):(\d{2})/,
+          '$1-$2-$3T$4:$5:$6'));
+        const next = new Date(tzNow);
+        next.setHours(24,0,0,0); // next local midnight
+        const ms = next - tzNow;
+        setTimeout(() => location.reload(), Math.max(1000, ms));
+      } catch (_) {}
+    })();
+  </script>
+</body>
+</html>
