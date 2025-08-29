@@ -8,8 +8,7 @@
     :root {
       --gap: 8px;        /* spacing between tiles */
       --radius: 16px;    /* corner rounding */
-      --rows: 1;         /* keep 1 row for a sleek strip */
-      --height: 280px;   /* overall strip height; adjust in Notion as needed */
+      --height: 300px;   /* overall strip height */
     }
 
     html, body { height: 100%; margin: 0; }
@@ -51,7 +50,7 @@
     }
 
     .tile img {
-      object-fit: cover;            /* fills like a wallpaper */
+      object-fit: cover;   /* fills like a wallpaper */
       object-position: center;
       transition: transform .6s ease;
     }
@@ -74,13 +73,15 @@
 
   <script>
     // === CONFIG ===
+    // Use the WWW domain and end with .rss (no extra slash)
     const RSS_URL = "https://www.pinterest.com/lulupontual/visionboard.rss";
-    const NUM_IMAGES = 4; // how many tiles you want side-by-side
-    const TIMEZONE = "America/Toronto";
-    // Parse RSS via rss2json (simple/free; if you hit limits, I can give you a Cloudflare Worker proxy)
+    const NUM_IMAGES = 4;                 // how many tiles side-by-side
+    const TIMEZONE = "America/Toronto";   // daily change at local midnight
+
+    // Parse RSS via rss2json (simple/free; if rate-limited, see Worker option below)
     const API = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(RSS_URL);
 
-    // Daily seed in America/Toronto
+    // Daily seed in specified timezone
     function daySeedLocal(tz) {
       const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'
@@ -89,7 +90,7 @@
       return `${map.year}-${map.month}-${map.day}`;
     }
 
-    // Simple string hash → 32-bit unsigned int
+    // Simple string hash → 32-bit uint
     function hashString(str) {
       let h = 2166136261;
       for (let i = 0; i < str.length; i++) {
@@ -122,7 +123,6 @@
     function extractImageFromItem(item) {
       if (item.enclosure && item.enclosure.link) return item.enclosure.link;
       if (item.thumbnail) return item.thumbnail;
-      // Fallback: parse first <img> in content
       const div = document.createElement("div");
       div.innerHTML = item.content || "";
       const img = div.querySelector("img");
@@ -136,24 +136,23 @@
         const data = await res.json();
         const items = Array.isArray(data.items) ? data.items : [];
 
-        // Keep only entries with an image
+        // Only keep entries with an image
         const withImages = items
           .map(it => ({ it, img: extractImageFromItem(it) }))
           .filter(x => !!x.img);
 
         const strip = document.getElementById("strip");
-        strip.innerHTML = ""; // clear
+        strip.innerHTML = "";
 
         if (!withImages.length) {
           strip.innerHTML = `<div style="display:grid;place-items:center;color:#bbb">No images found in this RSS feed.</div>`;
           return;
         }
 
-        // Seeded daily selection
+        // Seeded daily selection (changes each local midnight)
         const seed = hashString(daySeedLocal(TIMEZONE));
         const rng = mulberry32(seed);
         const shuffled = shuffle(withImages, rng);
-
         const picks = shuffled.slice(0, Math.min(NUM_IMAGES, shuffled.length));
 
         // Render tiles
@@ -183,12 +182,14 @@
 
     load();
 
-    // (Optional) Auto-refresh at next local midnight so Notion updates without reload
+    // Auto-refresh at next local midnight so Notion updates without manual reload
     (function scheduleMidnightRefresh(){
       try {
         const now = new Date();
-        const tzNow = new Date(new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, hour12:false,
-          year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit'
+        const tzNow = new Date(new Intl.DateTimeFormat('en-CA', {
+          timeZone: TIMEZONE, hour12:false,
+          year:'numeric', month:'2-digit', day:'2-digit',
+          hour:'2-digit', minute:'2-digit', second:'2-digit'
         }).format(now).replace(/(\d{4})-(\d{2})-(\d{2}), (\d{2}):(\d{2}):(\d{2})/,
           '$1-$2-$3T$4:$5:$6'));
         const next = new Date(tzNow);
@@ -197,6 +198,28 @@
         setTimeout(() => location.reload(), Math.max(1000, ms));
       } catch (_) {}
     })();
+
+    /* 
+    // OPTIONAL: If rss2json rate-limits you, use a Cloudflare Worker proxy:
+    // 1) Create a Worker with this code:
+    // export default {
+    //   async fetch(request) {
+    //     const url = new URL(request.url);
+    //     const rss = url.searchParams.get("rss");
+    //     if (!rss) return new Response("Missing ?rss=", { status: 400 });
+    //     const res = await fetch(rss, { headers: { "User-Agent": "Mozilla/5.0" } });
+    //     if (!res.ok) return new Response("Upstream error", { status: 502 });
+    //     const body = await res.text();
+    //     return new Response(body, {
+    //       headers: { "content-type": "application/rss+xml; charset=utf-8", "access-control-allow-origin": "*" }
+    //     });
+    //   }
+    // };
+    //
+    // 2) Then replace the API line above with:
+    // const WORKER = "https://YOUR-WORKER.workers.dev/?rss=" + encodeURIComponent(RSS_URL);
+    // const API = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(WORKER);
+    */
   </script>
 </body>
 </html>
